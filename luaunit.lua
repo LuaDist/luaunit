@@ -1,94 +1,64 @@
 --[[ 
-		luaunit.lua
+        luaunit.lua
 
 Description: A unit testing framework
-Homepage: http://phil.freehackers.org/luaunit/
+Homepage: https://github.com/bluebird75/luaunit
 Initial author: Ryu, Gwang (http://www.gpgstudy.com/gpgiki/LuaUnit)
 Lot of improvements by Philippe Fremy <phil@freehackers.org>
-Version: 1.3
-License: X11 License, see LICENSE.txt
-
-Changes between 1.3 and 1.2a:
-- port to lua 5.1
-- use orderedPairs() to iterate over a table in the right order
-- change the order of expected, actual in assertEquals() and the default value of
-  USE_EXPECTED_ACTUAL_IN_ASSERT_EQUALS. This can be adjusted with
-  USE_EXPECTED_ACTUAL_IN_ASSERT_EQUALS.
-
-Changes between 1.2a and 1.2:
-- fix: test classes were not run in the right order
-
-Changes between 1.2 and 1.1:
-- tests are now run in alphabetical order
-- fix a bug that would prevent all tests from being run
-
-Changes between 1.1 and 1.0:
-- internal variables are not global anymore
-- you can choose between assertEquals( actual, expected) or assertEquals(
-  expected, actual )
-- you can assert for an error: assertError( f, a, b ) will assert that calling
-  the function f(a,b) generates an error
-- display the calling stack when an error is spotted
-- a dedicated class collects and displays the result, to provide easy
-  customisation
-- two verbosity level, like in python unittest
+License: BSD License, see LICENSE.txt
 ]]--
 
 argv = arg
 
 --[[ Some people like assertEquals( actual, expected ) and some people prefer 
 assertEquals( expected, actual ).
-
 ]]--
 USE_EXPECTED_ACTUAL_IN_ASSERT_EQUALS = true
 
+DEFAULT_VERBOSITY = 1
+
 function assertError(f, ...)
-	-- assert that calling f with the arguments will raise an error
-	-- example: assertError( f, 1, 2 ) => f(1,2) should generate an error
-	local has_error, error_msg = not pcall( f, ... )
-	if has_error then return end 
-	error( "No error generated", 2 )
+    -- assert that calling f with the arguments will raise an error
+    -- example: assertError( f, 1, 2 ) => f(1,2) should generate an error
+    local has_error, error_msg = not pcall( f, ... )
+    if has_error then return end 
+    error( "Expected an error but no error generated", 2 )
+end
+
+function mytostring( v )
+    if type(v) == 'string' then
+        return '"'..v..'"'
+    end
+    if type(v) == 'table' then
+        if v.__class__ then
+            return string.gsub( tostring(v), 'table', v.__class__ )
+        end
+        return tostring(v)
+    end
+    return tostring(v)
 end
 
 function assertEquals(actual, expected)
-	-- assert that two values are equal and calls error else
-	if  actual ~= expected  then
-		local function wrapValue( v )
-			if type(v) == 'string' then return "'"..v.."'" end
-			return tostring(v)
-		end
-		if not USE_EXPECTED_ACTUAL_IN_ASSERT_EQUALS then
-			expected, actual = actual, expected
-		end
+    -- assert that two values are equal and calls error else
+    if  actual ~= expected  then
 
-		local errorMsg
-		if type(expected) == 'string' then
-			errorMsg = "\nexpected: "..wrapValue(expected).."\n"..
-                             "actual  : "..wrapValue(actual).."\n"
-		else
-			errorMsg = "expected: "..wrapValue(expected)..", actual: "..wrapValue(actual)
-		end
-		print (errorMsg)
-		error( errorMsg, 2 )
-	end
+        if not USE_EXPECTED_ACTUAL_IN_ASSERT_EQUALS then
+            expected, actual = actual, expected
+        end
+
+        local errorMsg
+        if type(expected) == 'string' then
+            errorMsg = "\nexpected: "..mytostring(expected).."\n"..
+                             "actual  : "..mytostring(actual).."\n"
+        else
+            errorMsg = "expected: "..mytostring(expected)..", actual: "..mytostring(actual)
+        end
+        error( errorMsg, 2 )
+    end
 end
 
 assert_equals = assertEquals
 assert_error = assertError
-
-function wrapFunctions(...)
-	-- Use me to wrap a set of functions into a Runnable test class:
-	-- TestToto = wrapFunctions( f1, f2, f3, f3, f5 )
-	-- Now, TestToto will be picked up by LuaUnit:run()
-	local testClass, testFunction
-	testClass = {}
-	local function storeAsMethod(idx, testName)
-		testFunction = _G[testName]
-		testClass[testName] = testFunction
-	end
-	table.foreachi( {...}, storeAsMethod )
-	return testClass
-end
 
 function __genOrderedIndex( t )
     local orderedIndex = {}
@@ -100,20 +70,22 @@ function __genOrderedIndex( t )
 end
 
 function orderedNext(t, state)
-	-- Equivalent of the next() function of table iteration, but returns the
-	-- keys in the alphabetic order. We use a temporary ordered key table that
-	-- is stored in the table being iterated.
+    -- Equivalent of the next() function of table iteration, but returns the
+    -- keys in the alphabetic order. We use a temporary ordered key table that
+    -- is stored in the table being iterated.
 
     --print("orderedNext: state = "..tostring(state) )
+    local key
     if state == nil then
         -- the first time, generate the index
+        t.__orderedIndex = nil
         t.__orderedIndex = __genOrderedIndex( t )
         key = t.__orderedIndex[1]
         return key, t[key]
     end
     -- fetch the next value
     key = nil
-    for i = 1,table.getn(t.__orderedIndex) do
+    for i = 1,#t.__orderedIndex do
         if t.__orderedIndex[i] == state then
             key = t.__orderedIndex[i+1]
         end
@@ -134,243 +106,496 @@ function orderedPairs(t)
     return orderedNext, t, nil
 end
 
--------------------------------------------------------------------------------
-UnitResult = { -- class
-	failureCount = 0,
-	testCount = 0,
-	errorList = {},
-	currentClassName = "",
-	currentTestName = "",
-	testHasFailure = false,
-	verbosity = 1
+function strsplit(delimiter, text)
+-- Split text into a list consisting of the strings in text,
+-- separated by strings matching delimiter (which may be a pattern). 
+-- example: strsplit(",%s*", "Anna, Bob, Charlie,Dolores")
+    local list = {}
+    local pos = 1
+    if string.find("", delimiter, 1) then -- this would result in endless loops
+        error("delimiter matches empty string!")
+    end
+    while 1 do
+        local first, last = string.find(text, delimiter, pos)
+        if first then -- found?
+            table.insert(list, string.sub(text, pos, first-1))
+            pos = last+1
+        else
+            table.insert(list, string.sub(text, pos))
+            break
+        end
+    end
+    return list
+end
+
+
+function prefixString( prefix, s )
+    local t, s2
+    t = strsplit('\n', s)
+    s2 = prefix..table.concat(t, '\n'..prefix)
+    return s2
+end
+
+----------------------------------------------------------------
+--                     class TapOutput
+----------------------------------------------------------------
+
+TapOutput = { -- class
+    __class__ = 'TapOutput',
+    runner = nil,
+    result = nil,
 }
-	function UnitResult:displayClassName()
-		print( '>>>>>>>>> '.. self.currentClassName )
-	end
+TapOutput_MT = { __index = TapOutput }
 
-	function UnitResult:displayTestName()
-		if self.verbosity > 0 then
-			print( ">>> ".. self.currentTestName )
-		end
-	end
+    function TapOutput:new()
+        local t = {}
+        t.verbosity = 0
+        setmetatable( t, TapOutput_MT )
+        return t
+    end
+    function TapOutput:startSuite() end
+    function TapOutput:startClass(className) end
+    function TapOutput:startTest(testName) end
 
-	function UnitResult:displayFailure( errorMsg )
-		if self.verbosity == 0 then
-			io.stdout:write("F")
-		else
-			print( errorMsg )
-			print( 'Failed' )
-		end
-	end
-
-	function UnitResult:displaySuccess()
-		if self.verbosity > 0 then
-			--print ("Ok" )
-		else 
-			io.stdout:write(".")
-		end
-	end
-
-	function UnitResult:displayOneFailedTest( failure )
-		testName, errorMsg = unpack( failure )
-		print(">>> "..testName.." failed")
-		print( errorMsg )
-	end
-
-	function UnitResult:displayFailedTests()
-		if table.getn( self.errorList ) == 0 then return end
-		print("Failed tests:")
-		print("-------------")
-		table.foreachi( self.errorList, self.displayOneFailedTest )
-		print()
-	end
-
-	function UnitResult:displayFinalResult()
-		print("=========================================================")
-		self:displayFailedTests()
-		local failurePercent, successCount
-		if self.testCount == 0 then
-			failurePercent = 0
-		else
-			failurePercent = 100 * self.failureCount / self.testCount
-		end
-		successCount = self.testCount - self.failureCount
-		print( string.format("Success : %d%% - %d / %d",
-			100-math.ceil(failurePercent), successCount, self.testCount) )
-		return self.failureCount
+    function TapOutput:addFailure( errorMsg, stackTrace )
+       print(string.format("not ok %d\t%s", self.result.testCount, self.result.currentTestName ))
+       if self.verbosity > 0 then
+           print( prefixString( '    ', errorMsg ) )
+        end
+       if self.verbosity > 1 then
+           print( prefixString( '    ', stackTrace ) )
+        end
     end
 
-	function UnitResult:startClass(className)
-		self.currentClassName = className
-		self:displayClassName()
-	end
+    function TapOutput:endTest(testHasFailure)
+       if not self.result.currentTestHasFailure then
+          print(string.format("ok     %d\t%s", self.result.testCount, self.result.currentTestName ))
+       end
+    end
 
-	function UnitResult:startTest(testName)
-		self.currentTestName = testName
-		self:displayTestName()
-        self.testCount = self.testCount + 1
-		self.testHasFailure = false
-	end
+    function TapOutput:endClass() end
 
-	function UnitResult:addFailure( errorMsg )
-		self.failureCount = self.failureCount + 1
-		self.testHasFailure = true
-		table.insert( self.errorList, { self.currentTestName, errorMsg } )
-		self:displayFailure( errorMsg )
-	end
+    function TapOutput:endSuite()
+       print("1.."..self.result.testCount)
+       return self.result.failureCount
+    end
 
-	function UnitResult:endTest()
-		if not self.testHasFailure then
-			self:displaySuccess()
-		end
-	end
 
--- class UnitResult end
+-- class TapOutput end
 
+
+----------------------------------------------------------------
+--                     class TextOutput
+----------------------------------------------------------------
+
+TextOutput = { __class__ = 'TextOutput' }
+TextOutput_MT = { -- class
+    __index = TextOutput
+}
+
+    function TextOutput:new()
+        local t = {}
+        t.runner = nil
+        t.result = nil
+        t.errorList ={}
+        t.verbosity = 1
+        setmetatable( t, TextOutput_MT )
+        return t
+    end
+
+    function TextOutput:startSuite()
+    end
+
+    function TextOutput:startClass(className)
+        if self.verbosity > 0 then
+            print( '>>>>>>>>> '.. self.result.currentClassName )
+        end
+    end
+
+    function TextOutput:startTest(testName)
+        if self.verbosity > 0 then
+            print( ">>> ".. self.result.currentTestName )
+        end
+    end
+
+    function TextOutput:addFailure( errorMsg, stackTrace )
+        table.insert( self.errorList, { self.result.currentTestName, errorMsg, stackTrace } )
+        if self.verbosity == 0 then
+            io.stdout:write("F")
+        end
+        if self.verbosity > 0 then
+            print( errorMsg )
+            print( 'Failed' )
+        end
+    end
+
+    function TextOutput:endTest(testHasFailure)
+        if not testHasFailure then
+            if self.verbosity > 0 then
+                --print ("Ok" )
+            else 
+                io.stdout:write(".")
+            end
+        end
+    end
+
+    function TextOutput:endClass()
+        if self.verbosity > 0 then
+           print()
+        end
+    end
+
+    function TextOutput:displayOneFailedTest( failure )
+        testName, errorMsg, stackTrace = unpack( failure )
+        print(">>> "..testName.." failed")
+        print( errorMsg )
+        if self.verbosity > 1 then
+            print( stackTrace )
+        end
+    end
+
+    function TextOutput:displayFailedTests()
+        if #self.errorList == 0 then return end
+        print("Failed tests:")
+        print("-------------")
+        for i,v in ipairs(self.errorList) do
+            self:displayOneFailedTest( v )
+        end
+        print()
+    end
+
+    function TextOutput:endSuite()
+        if self.verbosity == 0 then
+            print()
+        else
+            print("=========================================================")
+        end
+        self:displayFailedTests()
+        local successPercent, successCount
+        successCount = self.result.testCount - self.result.failureCount
+        if self.result.testCount == 0 then
+            successPercent = 100
+        else
+            successPercent = math.ceil( 100 * successCount / self.result.testCount )
+        end
+        print( string.format("Success : %d%% - %d / %d",
+            successPercent, successCount, self.result.testCount) )
+    end
+
+
+-- class TextOutput end
+
+
+----------------------------------------------------------------
+--                     class NilOutput
+----------------------------------------------------------------
+
+function nopCallable() 
+    --print(42) 
+    return nopCallable
+end
+
+NilOutput = {
+    __class__ = 'NilOuptut',    
+}
+NilOutput_MT = {
+    __index = nopCallable,
+}
+function NilOutput:new()
+    local t = {}
+    t.__class__ = 'NilOutput'
+    setmetatable( t, NilOutput_MT )
+    return t 
+end
+
+----------------------------------------------------------------
+--                     class LuaUnit
+----------------------------------------------------------------
 
 LuaUnit = {
-	result = UnitResult
+    outputType = TextOutput,
+    verbosity = DEFAULT_VERBOSITY,
+    __class__ = 'LuaUnit'
 }
-	-- Split text into a list consisting of the strings in text,
-	-- separated by strings matching delimiter (which may be a pattern). 
-	-- example: strsplit(",%s*", "Anna, Bob, Charlie,Dolores")
-	function LuaUnit.strsplit(delimiter, text)
-		local list = {}
-		local pos = 1
-		if string.find("", delimiter, 1) then -- this would result in endless loops
-			error("delimiter matches empty string!")
-		end
-		while 1 do
-			local first, last = string.find(text, delimiter, pos)
-			if first then -- found?
-				table.insert(list, string.sub(text, pos, first-1))
-				pos = last+1
-			else
-				table.insert(list, string.sub(text, pos))
-				break
-			end
-		end
-		return list
-	end
+LuaUnit_MT = { __index = LuaUnit }
 
-	function LuaUnit.isFunction(aObject) 
-		return 'function' == type(aObject)
-	end
-
-	function LuaUnit.strip_luaunit_stack(stack_trace)
-		stack_list = LuaUnit.strsplit( "\n", stack_trace )
-		strip_end = nil
-		for i = table.getn(stack_list),1,-1 do
-			-- a bit rude but it works !
-			if string.find(stack_list[i],"[C]: in function `xpcall'",0,true)
-				then
-				strip_end = i - 2
-			end
-		end
-		if strip_end then
-			table.setn( stack_list, strip_end )
-		end
-		stack_trace = table.concat( stack_list, "\n" )
-		return stack_trace
-	end
-
-    function LuaUnit:runTestMethod(aName, aClassInstance, aMethod)
-		local ok, errorMsg
-		-- example: runTestMethod( 'TestToto:test1', TestToto, TestToto.testToto(self) )
-		LuaUnit.result:startTest(aName)
-
-		-- run setUp first(if any)
-		if self.isFunction( aClassInstance.setUp) then
-				aClassInstance:setUp()
-		end
-
-		local function err_handler(e)
-			return e..'\n'..debug.traceback()
-		end
-
-		-- run testMethod()
-        ok, errorMsg = xpcall( aMethod, err_handler )
-		if not ok then
-			errorMsg  = self.strip_luaunit_stack(errorMsg)
-			LuaUnit.result:addFailure( errorMsg )
-        end
-
-		-- lastly, run tearDown(if any)
-		if self.isFunction(aClassInstance.tearDown) then
-			 aClassInstance:tearDown()
-		end
-
-		self.result:endTest()
+    function LuaUnit:new()
+        local t = {}
+        setmetatable( t, LuaUnit_MT )
+        return t
     end
 
-	function LuaUnit:runTestMethodName( methodName, classInstance )
-		-- example: runTestMethodName( 'TestToto:testToto', TestToto )
-		local methodInstance = loadstring(methodName .. '()')
-		LuaUnit:runTestMethod(methodName, classInstance, methodInstance)
-	end
+    -----------------[[ Utility methods ]]---------------------
 
-    function LuaUnit:runTestClassByName( aClassName )
-		-- example: runTestMethodName( 'TestToto' )
-		local hasMethod, methodName, classInstance
-		hasMethod = string.find(aClassName, ':' )
-		if hasMethod then
-			methodName = string.sub(aClassName, hasMethod+1)
-			aClassName = string.sub(aClassName,1,hasMethod-1)
-		end
-        classInstance = _G[aClassName]
-		if not classInstance then
-			error( "No such class: "..aClassName )
-		end
+    function LuaUnit.isFunction(aObject) 
+        return 'function' == type(aObject)
+    end
 
-		LuaUnit.result:startClass( aClassName )
+    --------------[[ Output methods ]]-------------------------
 
-		if hasMethod then
-			if not classInstance[ methodName ] then
-				error( "No such method: "..methodName )
-			end
-			LuaUnit:runTestMethodName( aClassName..':'.. methodName, classInstance )
-		else
-			-- run all test methods of the class
-			for methodName, method in orderedPairs(classInstance) do
-			--for methodName, method in classInstance do
-				if LuaUnit.isFunction(method) and string.sub(methodName, 1, 4) == "test" then
-					LuaUnit:runTestMethodName( aClassName..':'.. methodName, classInstance )
-				end
-			end
-		end
-		print()
-	end
+    function LuaUnit:ensureSuiteStarted( )
+        if self.result and self.result.suiteStarted then
+            return
+        end
+        self:startSuite()
+    end
 
-	function LuaUnit:run(...)
-		-- Run some specific test classes.
-		-- If no arguments are passed, run the class names specified on the
-		-- command line. If no class name is specified on the command line
-		-- run all classes whose name starts with 'Test'
-		--
-		-- If arguments are passed, they must be strings of the class names 
-		-- that you want to run
-                args={...};
-		if #args > 0 then
-			table.foreachi( args, LuaUnit.runTestClassByName )
-		else 
-			if argv and #argv > 0 then
-				table.foreachi(argv, LuaUnit.runTestClassByName )
-			else
-				-- create the list before. If you do not do it now, you
-				-- get undefined result because you modify _G while iterating
-				-- over it.
-				testClassList = {}
-				for key, val in pairs(_G) do 
-					if string.sub(key,1,4) == 'Test' then 
-						table.insert( testClassList, key )
-					end
-				end
-				for i, val in orderedPairs(testClassList) do 
-						LuaUnit:runTestClassByName(val)
-				end
-			end
-		end
-		return LuaUnit.result:displayFinalResult()
-	end
+    function LuaUnit:startSuite()
+        self.result = {}
+        self.result.failureCount = 0
+        self.result.testCount = 0
+        self.result.currentTestName = ""
+        self.result.currentClassName = ""
+        self.result.currentTestHasFailure = false
+        self.result.suiteStarted = true
+        self.outputType = self.outputType or TextOutput
+        self.output = self.outputType:new()
+        self.output.runner = self
+        self.output.result = self.result
+        self.output.verbosity = self.verbosity
+        self.output:startSuite()
+    end
+
+    function LuaUnit:startClass( className )
+        self.result.currentClassName = className
+        self.output:startClass( className )
+    end
+
+    function LuaUnit:startTest( testName  )
+        self.result.currentTestName = testName
+        self.result.testCount = self.result.testCount + 1
+        self.result.currentTestHasFailure = false
+        self.output:startTest( testName )
+    end
+
+    function LuaUnit:addFailure( errorMsg, stackTrace )
+        if not self.result.currentTestHasFailure then
+            self.result.failureCount = self.result.failureCount + 1
+            self.result.currentTestHasFailure = true
+        end
+        self.output:addFailure( errorMsg, stackTrace )
+    end
+
+    function LuaUnit:endTest()
+        self.output:endTest( self.result.currentTestHasFailure )
+        self.result.currentTestName = ""
+        self.result.currentTestHasFailure = false
+    end
+
+    function LuaUnit:endClass()
+        self.output:endClass()
+    end
+
+    function LuaUnit:endSuite()
+        self.result.suiteStarted = false
+        self.output:endSuite()
+    end
+
+    function LuaUnit:setOutputType(outputType)
+        -- default to text
+        -- tap produces results according to TAP format
+        if outputType:upper() == "NIL" then
+            self.outputType = NilOutput
+            return
+        end
+        if outputType:upper() == "TAP" then
+            self.outputType = TapOutput
+            return
+        end 
+        if outputType:upper() == "TEXT" then
+            self.outputType = TextOutput
+            return
+        end
+        error( 'No such format: '..outputType)
+    end
+
+    --------------[[ Runner ]]-----------------
+
+    SPLITTER = '\n>----------<\n'
+
+    function LuaUnit:protectedCall( classInstance , methodInstance)
+        -- if classInstance is nil, this is just a function run
+        local function err_handler(e)
+            return debug.traceback(e..SPLITTER, 4)
+        end
+
+        local ok=true, errorMsg, stackTrace
+        if classInstance then
+            -- stupid Lua < 5.2 does not allow xpcall with arguments so let's live with that
+            ok, errorMsg = xpcall( function () methodInstance(classInstance) end, err_handler )
+        else
+            ok, errorMsg = xpcall( function () methodInstance() end, err_handler )
+        end
+        if not ok then
+            t = strsplit( SPLITTER, errorMsg )
+            stackTrace = string.sub(t[2],2)
+            self:addFailure( t[1], stackTrace )
+        end
+
+        return ok
+    end
+
+
+    function LuaUnit:_runTestMethod(className, methodName, classInstance, methodInstance)
+        -- When executing a class method, all parameters are set
+        -- When executing a test function, className and classInstance are nil
+
+        if type(methodInstance) ~= 'function' then
+            error( tostring(methodName)..'must be a function, not '..type(methodInstance))
+        end
+
+        if className == nil then
+            className = '<TestFunction>'
+        end
+
+        if self.lastClassName ~= className then
+            if self.lastClassName ~= nil then
+                self:endClass()
+            end
+            self:startClass( className )
+            self.lastClassName = className
+        end
+
+        self:startTest(className..':'..methodName)
+
+        -- run setUp first(if any)
+        if classInstance and self.isFunction( classInstance.setUp ) then
+            self:protectedCall( classInstance, classInstance.setUp)
+        end
+
+        -- run testMethod()
+        if not self.result.currentTestHasFailure then
+            self:protectedCall( classInstance, methodInstance)
+        end
+
+        -- lastly, run tearDown(if any)
+        if classInstance and self.isFunction(classInstance.tearDown) then
+            self:protectedCall( classInstance, classInstance.tearDown)
+        end
+
+        self:endTest()
+    end
+
+    function LuaUnit:runSomeTest( someName, someInstance )
+        -- name is mandatory
+        -- if instance is not given, it's looked up in the global namespace
+        -- name can be a test class, a test function, or a test class + test method
+        -- instance can be a test class or a test function
+        -- example: runSomeTest( 'TestToto' )
+        -- example: runSomeTest( 'TestToto', TestToto )
+        -- example: runSomeTest( 'TestToto:testTiti' )
+        -- example: runSomeTest( 'TestToto:testTiti', TestToto )
+        -- example: runSomeTest( 'testFunction' )
+        -- example: runSomeTest( 'testFunction' , testFunction )
+
+        self:ensureSuiteStarted()
+
+        local hasMethod, methodName, methodInstance, className, classInstance
+        if someName == nil or someName == '' then
+            error( 'Name is required!')
+        end
+
+        hasMethod = string.find(someName, ':' )
+
+        -- name is class + method
+        if hasMethod then
+            methodName = string.sub(someName, hasMethod+1)
+            className = string.sub(someName,1,hasMethod-1)
+            classInstance = someInstance
+
+            classInstance = classInstance or _G[className]
+            if classInstance == nil then
+                error( "No such class: "..className )
+            end
+
+            if type(classInstance) ~= 'table' then
+                error( 'Instance must be a table')
+            end
+
+            methodInstance = classInstance[methodName]
+            if methodInstance == nil then
+                error( "Could not find method in class "..tostring(className).." for method "..tostring(methodName) )
+            end
+
+            self:_runTestMethod( className, methodName, classInstance, methodInstance )
+            return
+        end
+
+        if someInstance == nil then
+            someInstance = _G[someName]
+            if not someInstance then
+                error( "No such variable: "..someName )
+            end
+        end
+
+        if (type(someInstance) ~= 'table' and type(someInstance) ~= 'function') then
+            error( 'Instance must be function or table')
+        end
+
+        -- name is either a function or a class
+        if type(someInstance) == 'table' then
+            -- run all test methods of the class
+            className = someName
+            classInstance = someInstance
+
+            for methodName, methodInstance in orderedPairs(classInstance) do
+                if LuaUnit.isFunction(methodInstance) and string.sub(methodName, 1, 4) == "test" then
+                    self:_runTestMethod( className, methodName, classInstance, methodInstance )
+                end
+            end
+            return
+        end
+
+        if type(someInstance) == 'function' then
+            self:_runTestMethod( nil, someName, nil, someInstance )
+            return
+        end
+
+        error( 'Should never be reached...')
+
+    end
+
+    function LuaUnit:run(...)
+        -- Run some specific test classes.
+        -- If no arguments are passed, run the class names specified on the
+        -- command line. If no class name is specified on the command line
+        -- run all classes whose name starts with 'Test'
+        --
+        -- If arguments are passed, they must be strings of the class names 
+        -- that you want to run
+        local runner = self:new()
+        return runner:runSuite(...)
+    end
+
+    function LuaUnit:runSuite(...)
+        self:startSuite()
+
+        args={...};
+        if #args == 0 then
+            args = argv
+        end
+
+        if #args == 0 then
+            -- create the list if classes to run now ! If not, you can
+            -- not iterate over _G while modifying it.
+            args = {}
+            for key, val in pairs(_G) do 
+                if string.sub(key,1,4) == 'Test' then 
+                    table.insert( args, key )
+                end
+            end
+            table.sort( args )
+        end
+
+        for i,testName in ipairs( args ) do
+            self:runSomeTest( testName )
+        end
+
+        if self.lastClassName ~= nil then
+            self:endClass()
+        end
+        self:endSuite()
+        return self.result.failureCount
+    end
 -- class LuaUnit
 
