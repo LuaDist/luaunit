@@ -11,7 +11,7 @@ include ( lua )
 
 install_lua_module ( luaunit luaunit.lua )
 install_data ( LICENSE.txt README.txt )
-install_test ( test_luaunit.lua use_luaunit.lua )
-
+install_test ( test_luaunit.lua )
+install_example ( example_with_luaunit.lua )
 add_lua_test ( test_luaunit.lua )
 # note: use_luaunit.lua is expected to fail
